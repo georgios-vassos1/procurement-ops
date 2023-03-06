@@ -292,7 +292,7 @@ utility.func <- function(...) {
   c(mvtnorm::rmvnorm(1L, c(beta %*% x), Sigma))
 }
 
-run_sim <- function(supplier_utility, ...) {
+run_sim <- function(supplier_utility, bandit, ...) {
   args <- list(...)
 
   sim <- Simulation(tau = 2L*365L, nprod = 3L, n = 50L)
@@ -328,7 +328,7 @@ run_sim <- function(supplier_utility, ...) {
     j <- sim$next_event_type
     switch (j,
       requisition_generation(sim, B, lambda.t=lambda, config=config),
-      decision_point(sim, B, D, Y, betas=betas, Sigma=diag(10L,sim$n.y), rls.lambda=0.98),
+      decision_point(sim, B, D, Y, bandit, betas=betas, Sigma=diag(10L,sim$n.y), rls.lambda=0.98),
       break,
       supplier_evaluation(sim)
     )
