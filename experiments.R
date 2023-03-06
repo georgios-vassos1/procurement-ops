@@ -93,10 +93,98 @@ cores <- detectCores()
 cl    <- makeCluster(cores[1L]-4L) # not to overload your computer
 registerDoParallel(cl)
 
-joint.res <- foreach (i=seq(10L), .combine=rbind, .multicombine=TRUE) %dopar% {
-  thread.res <- run_sim(policy[["static"]], betas=betas, lambda=lambda, config=config) # calling a function
-  thread.res # Equivalent to joint.res = cbind(joint.res, thread.res)
+dir.create("~/procops/dumps")
+policies <- names(policy)
+
+for (idx in policies) {
+  joint.res <- foreach (i=seq(1000L), .combine=rbind, .multicombine=TRUE) %dopar% {
+    thread.res <- run_sim(policy[[idx]], idx=="bandits", betas=betas, lambda=lambda, config=config) # calling a function
+    thread.res # Equivalent to joint.res = cbind(joint.res, thread.res)
+  }
+  saveRDS(joint.res[,1], paste0("~/procops/dumps/tempcost-", idx))
+  saveRDS(joint.res[,2], paste0("~/procops/dumps/regret-", idx))
 }
+
 # stop cluster
 stopCluster(cl)
 
+## Results (processing output dumps)
+library(ggplot2)
+
+process_dump_violin <- function(file, policy, ...) {
+  stopifnot(!is.null(policy))
+
+  do.call(rbind, readRDS(file)) |>
+    tibble::rownames_to_column() |>
+    dplyr::transmute(
+      exp=factor(purrr::map_chr(stringr::str_split(rowname, stringr::fixed(".")), 2L)),
+      t    =t,
+      r.obs=r.obs,
+      r.hat=r.hat
+    ) |>
+    dplyr::group_by(exp) |>
+    dplyr::transmute(
+      t     =t,
+      Actual=cumsum(r.obs),
+      Bandit=cumsum(r.hat)
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::group_by(exp) |>
+    dplyr::summarise(
+      Actual=dplyr::last(Actual),
+      Bandit=dplyr::last(Bandit),
+      policy=policy
+    ) |>
+    dplyr::ungroup()
+}
+
+# Data dumps with results from experiments
+dumps <- list(
+  Supplier.1="~/procops/dumps/regret-supplier.1",
+  Supplier.2="~/procops/dumps/regret-supplier.2",
+  Random    ="~/procops/dumps/regret-random",
+  Utility   ="~/procops/dumps/regret-static",
+  Bandit    ="~/procops/dumps/regret-bandits"
+)
+
+# Process dumps into a data frame
+lapply(names(dumps), function(x) process_dump_violin(dumps[[x]], x)) -> L
+do.call(rbind, L) -> df
+
+## Box plot
+df |>
+  ggplot(aes(x=policy, y=(Actual))) +
+  # geom_violin(trim=TRUE) +
+  geom_boxplot(width=0.1, fill="white") +
+  xlab("") + ylab("Total regret") +
+  # ggtitle("1000 Monte Carlo simulations") +
+  scale_color_grey() +
+  scale_fill_grey() +
+  ggstyle(legend="None", axis.text.x.angle=45, size=22L)
+
+## Spaghetti plot
+do.call(rbind, readRDS("~/procops/dumps/regret-static")) |>
+  tibble::rownames_to_column() |>
+  dplyr::transmute(
+    exp=factor(purrr::map_chr(stringr::str_split(rowname, stringr::fixed(".")), 2L)),
+    t    =t,
+    r.obs=r.obs,
+    r.hat=r.hat
+  ) |>
+  dplyr::group_by(exp) |>
+  dplyr::transmute(
+    t         =t,
+    Utility   =cumsum(r.obs),
+    Bandit    =cumsum(r.hat)
+  ) |>
+  dplyr::ungroup() |>
+  reshape2::melt(id.vars=c("exp","t"), variable.name="model") |>
+  ggplot(aes(x=t, y=value, group=interaction(exp, model), color=model)) +
+  geom_line(size=0.1, alpha=0.4) +
+  geom_smooth(aes(group=model, color=model), colour=rep(gray.colors(2L, 0.1, 0.6), each=80L), se = TRUE) +
+  scale_color_grey() +
+  # facet_wrap(~regret, scales = "free") +
+  # ggtitle("1000 Monte Carlo simulations") +
+  xlab("day") + ylab("Cumulative regret") +
+  ggstyle(legend="bottom", size=22L) +
+  guides(colour = guide_legend(override.aes = list(size=1.0, alpha=1.0)))
